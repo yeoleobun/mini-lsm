@@ -2,13 +2,16 @@
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
 use std::cmp::{self};
+use std::collections::binary_heap::PeekMut;
 use std::collections::BinaryHeap;
+use std::io::Cursor;
 
-use anyhow::Result;
+use anyhow::{Ok, Result};
 
-use crate::key::KeySlice;
+use crate::key::{self, Key, KeySlice};
 
 use super::StorageIterator;
+use anyhow::anyhow;
 
 struct HeapWrapper<I: StorageIterator>(pub usize, pub Box<I>);
 
@@ -47,7 +50,44 @@ pub struct MergeIterator<I: StorageIterator> {
 
 impl<I: StorageIterator> MergeIterator<I> {
     pub fn create(iters: Vec<Box<I>>) -> Self {
-        unimplemented!()
+        let mut heap = BinaryHeap::new();
+        for (i, iter) in iters.into_iter().enumerate() {
+            if iter.is_valid() {
+                heap.push(HeapWrapper(i, iter));
+            }
+        }
+
+        let mut current = None;
+        while let Some(mut rapper) = heap.pop() {
+            if rapper.1.is_valid() {
+                if rapper.1.value().len() > 0 {
+                    current = Some(rapper);
+                    break;
+                }
+                while let Some(mut rocker) = heap.pop() {
+                    if rocker.1.is_valid() {
+                        if rocker.1.key() == rapper.1.key() {
+                            let _ = rocker.1.next();
+                            if rocker.1.is_valid() {
+                                heap.push(rocker);
+                            }
+                        } else {
+                            heap.push(rocker);
+                            break;
+                        }
+                    }
+                }
+                let _ = rapper.1.next();
+                if rapper.1.is_valid() {
+                    heap.push(rapper);
+                }
+            }
+        }
+
+        Self {
+            iters: heap,
+            current,
+        }
     }
 }
 
@@ -57,18 +97,41 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
     type KeyType<'a> = KeySlice<'a>;
 
     fn key(&self) -> KeySlice {
-        unimplemented!()
+        self.current.as_ref().unwrap().1.key()
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.current.as_ref().unwrap().1.value()
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.current.is_some()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        if self.current.is_none() {
+            return Ok(());
+        }
+        let mut cur = self.current.take().unwrap();
+        let v = cur.1.key().to_key_vec();
+        let pre_key = v.as_key_slice();
+        let _ = cur.1.next()?;
+        if cur.1.is_valid() {
+            self.iters.push(cur);
+        }
+        // skip same key
+        while let Some(mut iter) = self.iters.pop() {
+            if iter.1.is_valid() {
+                if pre_key < iter.1.key() {
+                    self.current = Some(iter);
+                    break;
+                }
+                let _ = iter.1.next()?;
+                if iter.1.is_valid() {
+                    self.iters.push(iter);
+                }
+            }
+        }
+        Ok(())
     }
 }

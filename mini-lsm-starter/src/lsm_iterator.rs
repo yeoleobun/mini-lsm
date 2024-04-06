@@ -1,10 +1,12 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
-use anyhow::Result;
+use anyhow::{Ok, Result};
+use nom::Err;
 
 use crate::{
     iterators::{merge_iterator::MergeIterator, StorageIterator},
+    key,
     mem_table::MemTableIterator,
 };
 
@@ -20,24 +22,34 @@ impl LsmIterator {
         Ok(Self { inner: iter })
     }
 }
-
 impl StorageIterator for LsmIterator {
     type KeyType<'a> = &'a [u8];
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.inner.is_valid()
     }
 
     fn key(&self) -> &[u8] {
-        unimplemented!()
+        self.inner.key().into_inner()
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.inner.value()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        loop {
+            self.inner.next()?;
+            if !self.inner.is_valid() {
+                break;
+            }
+            if self.value().len() > 0 {
+                let key = self.key();
+                let val = self.value();
+                return Ok(());
+            }
+        }
+        Ok(())
     }
 }
 
@@ -57,23 +69,33 @@ impl<I: StorageIterator> FusedIterator<I> {
         }
     }
 }
+use anyhow::anyhow;
 
 impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
     type KeyType<'a> = I::KeyType<'a> where Self: 'a;
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        !self.has_errored && self.iter.is_valid()
     }
 
     fn key(&self) -> Self::KeyType<'_> {
-        unimplemented!()
+        self.iter.key()
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.iter.value()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        if self.has_errored {
+            return Err(anyhow!("iterator has already errored"));
+        }
+
+        if let Err(err) = self.iter.next() {
+            self.has_errored = true;
+            Err(err)
+        } else {
+            Ok(())
+        }
     }
 }
