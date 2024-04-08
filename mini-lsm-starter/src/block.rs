@@ -39,4 +39,11 @@ impl Block {
         let offsets = unsafe { Vec::from(slice::from_raw_parts(ptr, n)) };
         Self { data: kv, offsets }
     }
+
+    pub fn empty() -> Block {
+        Block {
+            data: Vec::new(),
+            offsets: Vec::new(),
+        }
+    }
 }

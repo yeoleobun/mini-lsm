@@ -39,7 +39,7 @@ impl BlockIterator {
 
     /// Creates a block iterator and seek to the first entry.
     pub fn create_and_seek_to_first(block: Arc<Block>) -> Self {
-        let mut iter = BlockIterator::new(block);
+        let mut iter = Self::new(block);
         iter.seek_to_first();
         iter
     }
