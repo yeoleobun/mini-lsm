@@ -1,9 +1,9 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
-use std::sync::Arc;
+use std::{ops::Bound, sync::Arc};
 
-use anyhow::Result;
+use anyhow::{Ok, Result};
 
 use super::SsTable;
 use crate::{
@@ -17,9 +17,33 @@ pub struct SsTableIterator {
     table: Arc<SsTable>,
     blk_iter: BlockIterator,
     blk_idx: usize,
+    end_bound: Bound<Vec<u8>>,
 }
 
 impl SsTableIterator {
+    pub fn create_with_bound(
+        table: Arc<SsTable>,
+        lower_bound: Bound<&[u8]>,
+        upper_bound: Bound<&[u8]>,
+    ) -> Result<Self> {
+        let mut iter = match lower_bound {
+            Bound::Included(bound) => {
+                SsTableIterator::create_and_seek_to_key(table, KeySlice::from_slice(bound))?
+            }
+            Bound::Excluded(bound) => {
+                let mut iter =
+                    SsTableIterator::create_and_seek_to_key(table, KeySlice::from_slice(bound))?;
+                let key = KeySlice::from_slice(bound);
+                while iter.is_valid() && iter.key() == key {
+                    iter.next()?
+                }
+                iter
+            }
+            Bound::Unbounded => SsTableIterator::create_and_seek_to_first(table)?,
+        };
+        iter.end_bound = upper_bound.map(|v| Vec::from(v));
+        Ok(iter)
+    }
     /// Create a new iterator and seek to the first key-value pair in the first data block.
     pub fn create_and_seek_to_first(table: Arc<SsTable>) -> Result<Self> {
         let block = if table.block_meta.is_empty() {
@@ -32,6 +56,7 @@ impl SsTableIterator {
             table,
             blk_iter: iter,
             blk_idx: 0,
+            end_bound: Bound::Unbounded,
         })
     }
 
@@ -56,6 +81,7 @@ impl SsTableIterator {
             table,
             blk_iter: iter,
             blk_idx: i,
+            end_bound: Bound::Unbounded,
         })
     }
 
@@ -91,7 +117,14 @@ impl StorageIterator for SsTableIterator {
 
     /// Return whether the current block iterator is valid or not.
     fn is_valid(&self) -> bool {
-        self.blk_iter.is_valid()
+        if !self.blk_iter.is_valid() {
+            return false;
+        }
+        match self.end_bound.as_ref().map(|v| KeySlice::from_slice(&v)) {
+            Bound::Included(bound) => self.key() <= bound,
+            Bound::Excluded(bound) => self.key() < bound,
+            Bound::Unbounded => true,
+        }
     }
 
     /// Move to the next `key` in the block.

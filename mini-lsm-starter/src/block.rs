@@ -5,7 +5,6 @@ mod builder;
 mod iterator;
 
 use core::slice;
-use std::env::consts;
 
 pub use builder::BlockBuilder;
 use bytes::{BufMut, Bytes, BytesMut};
