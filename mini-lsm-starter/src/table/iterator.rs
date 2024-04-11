@@ -41,7 +41,7 @@ impl SsTableIterator {
             }
             Bound::Unbounded => SsTableIterator::create_and_seek_to_first(table)?,
         };
-        iter.end_bound = upper_bound.map(|v| Vec::from(v));
+        iter.end_bound = upper_bound.map(Vec::from);
         Ok(iter)
     }
     /// Create a new iterator and seek to the first key-value pair in the first data block.
@@ -120,7 +120,7 @@ impl StorageIterator for SsTableIterator {
         if !self.blk_iter.is_valid() {
             return false;
         }
-        match self.end_bound.as_ref().map(|v| KeySlice::from_slice(&v)) {
+        match self.end_bound.as_ref().map(|v| KeySlice::from_slice(v)) {
             Bound::Included(bound) => self.key() <= bound,
             Bound::Excluded(bound) => self.key() < bound,
             Bound::Unbounded => true,

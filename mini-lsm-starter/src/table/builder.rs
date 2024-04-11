@@ -91,7 +91,7 @@ impl SsTableBuilder {
         BlockMeta::encode_block_meta(&self.meta, &mut self.data);
         self.data.put_u32(block_meta_offset as u32);
         let file = FileObject::create(path.as_ref(), self.data)?;
-        let (first_key, last_key) = if self.meta.len() > 0 {
+        let (first_key, last_key) = if !self.meta.is_empty() {
             (
                 self.meta[0].first_key.clone(),
                 self.meta[self.meta.len() - 1].last_key.clone(),

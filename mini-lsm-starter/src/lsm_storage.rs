@@ -2,8 +2,8 @@
 
 use std::borrow::BorrowMut;
 use std::collections::HashMap;
-use std::iter::{self, once};
-use std::ops::{Bound, DerefMut};
+use std::fs::{self, File};
+use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -24,7 +24,7 @@ use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
 use crate::mem_table::MemTable;
 use crate::mvcc::LsmMvccInner;
-use crate::table::{SsTable, SsTableIterator};
+use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
 pub type BlockCache = moka::sync::Cache<(usize, usize), Arc<Block>>;
 
@@ -159,7 +159,21 @@ impl Drop for MiniLsm {
 
 impl MiniLsm {
     pub fn close(&self) -> Result<()> {
-        unimplemented!()
+        self.compaction_notifier.send(())?;
+        self.flush_notifier.send(())?;
+        self.compaction_thread
+            .lock()
+            .take()
+            .unwrap()
+            .join()
+            .map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        self.flush_thread
+            .lock()
+            .take()
+            .unwrap()
+            .join()
+            .map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        Ok(())
     }
 
     /// Start the storage engine by either loading an existing directory or creating a new one if the directory does
@@ -242,6 +256,9 @@ impl LsmStorageInner {
     /// not exist.
     pub(crate) fn open(path: impl AsRef<Path>, options: LsmStorageOptions) -> Result<Self> {
         let path = path.as_ref();
+        if !path.exists() {
+            fs::create_dir_all(path)?;
+        }
         let state = LsmStorageState::create(&options);
 
         let compaction_controller = match &options.compaction_options {
@@ -285,19 +302,11 @@ impl LsmStorageInner {
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
         let iter = self.scan(Bound::Included(_key), Bound::Unbounded)?;
-        if iter.is_valid() && iter.key() == _key && iter.value().len() > 0 {
-            return Ok(Some(Bytes::copy_from_slice(iter.value())));
+        if iter.is_valid() && iter.key() == _key && !iter.value().is_empty() {
+            Ok(Some(Bytes::copy_from_slice(iter.value())))
         } else {
-            return Ok(None);
+            Ok(None)
         }
-        // let this = self.state.read();
-        // for table in once(&this.memtable).chain(this.imm_memtables.iter()) {
-        //     let res = table.get(_key);
-        //     if res.is_some() {
-        //         return Ok(res.filter(|x| x.len() > 0));
-        //     }
-        // }
-        // Ok(None)
     }
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.
@@ -356,7 +365,27 @@ impl LsmStorageInner {
 
     /// Force flush the earliest-created immutable memtable to disk
     pub fn force_flush_next_imm_memtable(&self) -> Result<()> {
-        unimplemented!()
+        let _state_lock = self.state_lock.lock();
+
+        let memtable_to_flush = {
+            let guard = self.state.read();
+            guard.imm_memtables.last().cloned().unwrap()
+        };
+
+        let sst_id = self.next_sst_id();
+        let mut sst_builder = SsTableBuilder::new(self.options.block_size);
+        memtable_to_flush.flush(&mut sst_builder)?;
+        let path = self.path.join(format!("{:05}.sst", sst_id));
+        File::create(path.clone())?;
+        let sst = sst_builder.build(sst_id, Some(self.block_cache.clone()), path)?;
+        {
+            let mut guard = self.state.write();
+            let lsm = Arc::get_mut(&mut guard).unwrap();
+            lsm.imm_memtables.pop();
+            lsm.sstables.insert(sst_id, Arc::new(sst));
+            lsm.l0_sstables.insert(0, sst_id);
+        };
+        Ok(())
     }
 
     pub fn new_txn(&self) -> Result<()> {
@@ -386,15 +415,15 @@ impl LsmStorageInner {
         let sst_iters = snapshot
             .l0_sstables
             .iter()
-            .map(|id| {
-                Box::new(
-                    SsTableIterator::create_with_bound(
-                        snapshot.sstables.get(id).unwrap().clone(),
-                        _lower,
-                        _upper,
-                    )
-                    .unwrap(),
-                )
+            .filter_map(|id| {
+                let table = snapshot.sstables.get(id).unwrap();
+                if table.range_overlap(_lower, _upper) {
+                    Some(Box::new(
+                        SsTableIterator::create_with_bound(table.clone(), _lower, _upper).unwrap(),
+                    ))
+                } else {
+                    None
+                }
             })
             .collect();
         let iter = TwoMergeIterator::create(

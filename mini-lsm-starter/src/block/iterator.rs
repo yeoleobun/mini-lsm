@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use crate::key::{self, Key, KeySlice, KeyVec};
+use crate::key::{KeySlice, KeyVec};
 
 use super::Block;
 
@@ -24,7 +24,7 @@ pub struct BlockIterator {
 impl BlockIterator {
     fn new(block: Arc<Block>) -> Self {
         let mut first_key = KeyVec::new();
-        if block.data.len() > 0 {
+        if !block.data.is_empty() {
             let key_size = (block.data[0] as usize) << 8 | block.data[1] as usize;
             first_key.set_from_slice(KeySlice::from_slice(&block.data[2..key_size + 2]));
         }
@@ -33,7 +33,7 @@ impl BlockIterator {
             key: KeyVec::new(),
             value_range: (0, 0),
             idx: 0,
-            first_key: first_key,
+            first_key,
         }
     }
 
@@ -71,7 +71,7 @@ impl BlockIterator {
     pub fn seek_to_first(&mut self) {
         self.idx = 0;
         self.key = self.first_key.clone();
-        if self.block.data.len() > 0 {
+        if !self.block.data.is_empty() {
             let key_size = (self.block.data[0] as usize) << 8 | self.block.data[1] as usize;
             let value_size = (self.block.data[key_size + 2] as usize) << 8
                 | self.block.data[key_size + 3] as usize;
@@ -128,7 +128,7 @@ impl BlockIterator {
             cur = KeySlice::from_slice(&self.block.data[offset + 2..offset + 2 + length]);
         }
 
-        if cur.len() > 0 && cur >= key {
+        if !cur.is_empty() && cur >= key {
             self.idx = i;
             self.key.set_from_slice(cur);
             let value_offset = offset + 2 + length;

@@ -1,19 +1,14 @@
 #![allow(dead_code)] // REMOVE THIS LINE after fully implementing this functionality
 
-use std::borrow::Borrow;
-use std::fmt::UpperExp;
-use std::fs::File;
-use std::io::BufWriter;
 use std::ops::Bound;
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Ok, Result};
 use bytes::Bytes;
 use crossbeam_skiplist::SkipMap;
 use ouroboros::self_referencing;
-use parking_lot::Mutex;
 
 use crate::iterators::StorageIterator;
 use crate::key::KeySlice;
@@ -123,7 +118,10 @@ impl MemTable {
 
     /// Flush the mem-table to SSTable. Implement in week 1 day 6.
     pub fn flush(&self, _builder: &mut SsTableBuilder) -> Result<()> {
-        unimplemented!()
+        for entry in self.map.iter() {
+            _builder.add(KeySlice::from_slice(entry.key()), entry.value())
+        }
+        Ok(())
     }
 
     pub fn id(&self) -> usize {
@@ -172,7 +170,7 @@ impl StorageIterator for MemTableIterator {
     }
 
     fn is_valid(&self) -> bool {
-        self.with_item(|it| it.0.len() > 0)
+        self.with_item(|it| !it.0.is_empty())
     }
 
     fn next(&mut self) -> Result<()> {

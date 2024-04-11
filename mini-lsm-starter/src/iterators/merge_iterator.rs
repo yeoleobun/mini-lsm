@@ -2,16 +2,13 @@
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
 use std::cmp::{self};
-use std::collections::binary_heap::PeekMut;
 use std::collections::BinaryHeap;
-use std::io::Cursor;
 
 use anyhow::{Ok, Result};
 
-use crate::key::{self, Key, KeySlice};
+use crate::key::KeySlice;
 
 use super::StorageIterator;
-use anyhow::anyhow;
 
 struct HeapWrapper<I: StorageIterator>(pub usize, pub Box<I>);
 
@@ -60,7 +57,7 @@ impl<I: StorageIterator> MergeIterator<I> {
         let mut current = None;
         while let Some(mut rapper) = heap.pop() {
             if rapper.1.is_valid() {
-                if rapper.1.value().len() > 0 {
+                if !rapper.1.value().is_empty() {
                     current = Some(rapper);
                     break;
                 }
@@ -115,7 +112,7 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
         let mut cur = self.current.take().unwrap();
         let v = cur.1.key().to_key_vec();
         let pre_key = v.as_key_slice();
-        let _ = cur.1.next()?;
+        cur.1.next()?;
         if cur.1.is_valid() {
             self.iters.push(cur);
         }
@@ -126,12 +123,27 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
                     self.current = Some(iter);
                     break;
                 }
-                let _ = iter.1.next()?;
+                iter.1.next()?;
                 if iter.1.is_valid() {
                     self.iters.push(iter);
                 }
             }
         }
         Ok(())
+    }
+
+    fn num_active_iterators(&self) -> usize {
+        let count = self
+            .iters
+            .iter()
+            .map(|i| i.1.num_active_iterators())
+            .sum::<usize>();
+
+        if let Some(a) = self.current.as_ref() {
+            if a.1.is_valid() {
+                return count + 1;
+            }
+        }
+        count
     }
 }

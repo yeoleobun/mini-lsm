@@ -33,7 +33,7 @@ impl BlockBuilder {
     /// Adds a key-value pair to the block. Returns false when the block is full.
     #[must_use]
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
-        if self.first_key.len() == 0 {
+        if self.first_key.is_empty() {
             self.first_key.set_from_slice(key);
         } else if self.data.len() + self.offsets.len() * 2 + key.len() + value.len() + 8
             > self.block_size

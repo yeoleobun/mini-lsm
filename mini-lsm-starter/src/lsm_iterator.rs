@@ -2,13 +2,11 @@
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
 use anyhow::{Ok, Result};
-use nom::Err;
 
 use crate::{
     iterators::{
         merge_iterator::MergeIterator, two_merge_iterator::TwoMergeIterator, StorageIterator,
     },
-    key,
     mem_table::MemTableIterator,
     table::SsTableIterator,
 };
@@ -47,13 +45,17 @@ impl StorageIterator for LsmIterator {
             if !self.inner.is_valid() {
                 break;
             }
-            if self.value().len() > 0 {
+            if !self.value().is_empty() {
                 let key = self.key();
                 let val = self.value();
                 return Ok(());
             }
         }
         Ok(())
+    }
+
+    fn num_active_iterators(&self) -> usize {
+        self.inner.num_active_iterators()
     }
 }
 
@@ -101,5 +103,8 @@ impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
         } else {
             Ok(())
         }
+    }
+    fn num_active_iterators(&self) -> usize {
+        self.iter.num_active_iterators()
     }
 }

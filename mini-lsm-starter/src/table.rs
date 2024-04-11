@@ -6,6 +6,7 @@ mod builder;
 mod iterator;
 
 use std::fs::File;
+use std::ops::Bound;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -13,7 +14,6 @@ use anyhow::{anyhow, Ok, Result};
 pub use builder::SsTableBuilder;
 use bytes::{Buf, BufMut, Bytes};
 pub use iterator::SsTableIterator;
-use moka::sync::Cache;
 
 use crate::block::Block;
 use crate::key::{KeyBytes, KeySlice};
@@ -132,7 +132,7 @@ impl SsTable {
         let offset = u32::from_be_bytes(file.read(size - 4, 4)?.try_into().unwrap()) as u64;
         let block_meta =
             BlockMeta::decode_block_meta(file.read(offset, size - offset - 4)?.as_ref());
-        let (first_key, last_key) = if block_meta.len() > 0 {
+        let (first_key, last_key) = if !block_meta.is_empty() {
             (
                 block_meta[0].first_key.clone(),
                 block_meta[block_meta.len() - 1].last_key.clone(),
@@ -243,5 +243,39 @@ impl SsTable {
 
     pub fn max_ts(&self) -> u64 {
         self.max_ts
+    }
+
+    pub fn range_overlap(&self, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> bool {
+        let first = self.first_key.as_key_slice();
+        let last = self.last_key.as_key_slice();
+        let lower = lower.map(KeySlice::from_slice);
+        let upper = upper.map(KeySlice::from_slice);
+        match lower {
+            Bound::Included(x) => {
+                if last < x {
+                    return false;
+                }
+            }
+            Bound::Excluded(x) => {
+                if last <= x {
+                    return false;
+                }
+            }
+            Bound::Unbounded => {}
+        }
+        match upper {
+            Bound::Included(x) => {
+                if first > x {
+                    return false;
+                }
+            }
+            Bound::Excluded(x) => {
+                if first >= x {
+                    return false;
+                }
+            }
+            Bound::Unbounded => {}
+        }
+        true
     }
 }
