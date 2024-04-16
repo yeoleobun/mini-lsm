@@ -20,6 +20,7 @@ use crate::compact::{
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::iterators::StorageIterator;
+use crate::key::KeySlice;
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
 use crate::mem_table::MemTable;
@@ -301,12 +302,42 @@ impl LsmStorageInner {
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
-        let iter = self.scan(Bound::Included(_key), Bound::Unbounded)?;
-        if iter.is_valid() && iter.key() == _key && !iter.value().is_empty() {
-            Ok(Some(Bytes::copy_from_slice(iter.value())))
-        } else {
-            Ok(None)
+        let snapshot = Arc::clone(&self.state.read());
+        if let Some(value) = snapshot.memtable.get(_key) {
+            if value.is_empty() {
+                return Ok(None);
+            } else {
+                return Ok(Some(value));
+            }
         }
+
+        for memtable in &snapshot.imm_memtables {
+            if let Some(value) = memtable.get(_key) {
+                if value.is_empty() {
+                    return Ok(None);
+                } else {
+                    return Ok(Some(value));
+                }
+            }
+        }
+
+        for id in &snapshot.l0_sstables {
+            let table = snapshot.sstables.get(id).unwrap().clone();
+            if let Some(bloom) = &table.bloom {
+                if bloom.may_contain(farmhash::fingerprint32(_key)) {
+                    let key = KeySlice::from_slice(_key);
+                    let iter = SsTableIterator::create_and_seek_to_key(table, key)?;
+                    if iter.is_valid() && iter.key() == key {
+                        if iter.value().is_empty() {
+                            return Ok(None);
+                        } else {
+                            return Ok(Some(Bytes::copy_from_slice(iter.value())));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.

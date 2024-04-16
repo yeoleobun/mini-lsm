@@ -6,7 +6,13 @@ use bytes::BufMut;
 use crate::key::{KeySlice, KeyVec};
 
 use super::Block;
-
+pub fn common_prefix(first_key: &[u8], current_key: &[u8]) -> usize {
+    let mut i = 0;
+    while i < std::cmp::min(first_key.len(), current_key.len()) && first_key[i] == current_key[i] {
+        i += 1;
+    }
+    i
+}
 /// Builds a block.
 pub struct BlockBuilder {
     /// Offsets of each key-value entries.
@@ -33,19 +39,29 @@ impl BlockBuilder {
     /// Adds a key-value pair to the block. Returns false when the block is full.
     #[must_use]
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
-        if self.first_key.is_empty() {
-            self.first_key.set_from_slice(key);
-        } else if self.data.len() + self.offsets.len() * 2 + key.len() + value.len() + 8
-            > self.block_size
+        if !self.first_key.is_empty()
+            && self.data.len() + self.offsets.len() * 2 + key.len() + value.len() + 8
+                > self.block_size
         {
             return false;
         }
-        let offset = self.data.len() as u16;
-        self.data.put_u16(key.len() as u16);
-        self.data.extend_from_slice(key.into_inner());
+
+        self.offsets.push(self.data.len() as u16);
+        if self.first_key.is_empty() {
+            self.first_key.set_from_slice(key);
+            self.data.put_u16(key.len() as u16);
+            self.data.extend_from_slice(key.into_inner());
+        } else {
+            let overlap_len =
+                common_prefix(self.first_key.as_key_slice().into_inner(), key.into_inner());
+            let rest_len = key.len() - overlap_len;
+            self.data.put_u16(overlap_len as u16);
+            self.data.put_u16(rest_len as u16);
+            self.data
+                .extend_from_slice(&key.into_inner()[overlap_len..]);
+        }
         self.data.put_u16(value.len() as u16);
         self.data.put_slice(value);
-        self.offsets.push(offset);
         true
     }
 
