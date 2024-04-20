@@ -1,6 +1,3 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use std::cmp::{self};
 use std::collections::BinaryHeap;
 
@@ -47,39 +44,14 @@ pub struct MergeIterator<I: StorageIterator> {
 
 impl<I: StorageIterator> MergeIterator<I> {
     pub fn create(iters: Vec<Box<I>>) -> Self {
-        let mut heap = BinaryHeap::new();
+        let mut heap = BinaryHeap::with_capacity(iters.len());
         for (i, iter) in iters.into_iter().enumerate() {
             if iter.is_valid() {
                 heap.push(HeapWrapper(i, iter));
             }
         }
 
-        let mut current = None;
-        while let Some(mut rapper) = heap.pop() {
-            if rapper.1.is_valid() {
-                if !rapper.1.value().is_empty() {
-                    current = Some(rapper);
-                    break;
-                }
-                while let Some(mut rocker) = heap.pop() {
-                    if rocker.1.is_valid() {
-                        if rocker.1.key() == rapper.1.key() {
-                            let _ = rocker.1.next();
-                            if rocker.1.is_valid() {
-                                heap.push(rocker);
-                            }
-                        } else {
-                            heap.push(rocker);
-                            break;
-                        }
-                    }
-                }
-                let _ = rapper.1.next();
-                if rapper.1.is_valid() {
-                    heap.push(rapper);
-                }
-            }
-        }
+        let current = heap.pop();
 
         Self {
             iters: heap,
@@ -116,17 +88,15 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
         if cur.1.is_valid() {
             self.iters.push(cur);
         }
-        // skip same key
+
         while let Some(mut iter) = self.iters.pop() {
+            if pre_key < iter.1.key() {
+                self.current = Some(iter);
+                break;
+            }
+            iter.1.next()?;
             if iter.1.is_valid() {
-                if pre_key < iter.1.key() {
-                    self.current = Some(iter);
-                    break;
-                }
-                iter.1.next()?;
-                if iter.1.is_valid() {
-                    self.iters.push(iter);
-                }
+                self.iters.push(iter);
             }
         }
         Ok(())

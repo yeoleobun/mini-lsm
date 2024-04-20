@@ -1,26 +1,29 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use anyhow::{Ok, Result};
 
 use crate::{
     iterators::{
-        merge_iterator::MergeIterator, two_merge_iterator::TwoMergeIterator, StorageIterator,
+        concat_iterator::SstConcatIterator, merge_iterator::MergeIterator,
+        two_merge_iterator::TwoMergeIterator, StorageIterator,
     },
     mem_table::MemTableIterator,
     table::SsTableIterator,
 };
 
 /// Represents the internal type for an LSM iterator. This type will be changed across the tutorial for multiple times.
-type LsmIteratorInner =
-    TwoMergeIterator<MergeIterator<MemTableIterator>, MergeIterator<SsTableIterator>>;
+type LsmIteratorInner = TwoMergeIterator<
+    TwoMergeIterator<MergeIterator<MemTableIterator>, MergeIterator<SsTableIterator>>,
+    SstConcatIterator,
+>;
 
 pub struct LsmIterator {
     inner: LsmIteratorInner,
 }
 
 impl LsmIterator {
-    pub(crate) fn new(iter: LsmIteratorInner) -> Result<Self> {
+    pub(crate) fn new(mut iter: LsmIteratorInner) -> Result<Self> {
+        while iter.is_valid() && iter.value().is_empty() {
+            iter.next()?;
+        }
         Ok(Self { inner: iter })
     }
 }
@@ -40,16 +43,9 @@ impl StorageIterator for LsmIterator {
     }
 
     fn next(&mut self) -> Result<()> {
-        loop {
+        self.inner.next()?;
+        while self.inner.is_valid() && self.value().is_empty() {
             self.inner.next()?;
-            if !self.inner.is_valid() {
-                break;
-            }
-            if !self.value().is_empty() {
-                let key = self.key();
-                let val = self.value();
-                return Ok(());
-            }
         }
         Ok(())
     }

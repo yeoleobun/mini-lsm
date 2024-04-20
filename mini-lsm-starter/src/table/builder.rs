@@ -1,6 +1,3 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use std::path::Path;
 use std::sync::Arc;
 
@@ -77,7 +74,7 @@ impl SsTableBuilder {
     /// Since the data blocks contain much more data than meta blocks, just return the size of data
     /// blocks here.
     pub fn estimated_size(&self) -> usize {
-        self.data.len()
+        self.data.len() + self.builder.size()
     }
 
     /// Builds the SSTable and writes it to the given path. Use the `FileObject` structure to manipulate the disk objects.
@@ -102,25 +99,16 @@ impl SsTableBuilder {
         self.data.put_u32(bloom_offset as u32);
 
         let file = FileObject::create(path.as_ref(), self.data)?;
-        let (first_key, last_key) = if !self.meta.is_empty() {
-            (
-                self.meta[0].first_key.clone(),
-                self.meta[self.meta.len() - 1].last_key.clone(),
-            )
-        } else {
-            (
-                KeyBytes::from_bytes(Bytes::new()),
-                KeyBytes::from_bytes(Bytes::new()),
-            )
-        };
+        let first_key = self.meta[0].first_key.clone();
+        let last_key = self.meta[self.meta.len() - 1].last_key.clone();
         Ok(SsTable {
             file,
+            first_key,
+            last_key,
             block_meta: self.meta,
             block_meta_offset,
             id,
             block_cache,
-            first_key,
-            last_key,
             bloom: Some(bloom),
             max_ts: 0,
         })

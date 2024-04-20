@@ -35,11 +35,7 @@ impl BlockMeta {
     /// Encode block meta to a buffer.
     /// You may add extra fields to the buffer,
     /// in order to help keep track of `first_key` when decoding from the same buffer in the future.
-    pub fn encode_block_meta(
-        block_meta: &[BlockMeta],
-        #[allow(clippy::ptr_arg)] // remove this allow after you finish
-        buf: &mut Vec<u8>,
-    ) {
+    pub fn encode_block_meta(block_meta: &[BlockMeta], buf: &mut Vec<u8>) {
         for meta in block_meta {
             buf.put_u32(meta.offset as u32);
             buf.put_u16(meta.first_key.len() as u16);
@@ -186,10 +182,6 @@ impl SsTable {
 
     /// Read a block from the disk.
     pub fn read_block(&self, block_idx: usize) -> Result<Arc<Block>> {
-        if block_idx >= self.block_meta.len() {
-            return Err(anyhow!("block index out of bound"));
-        }
-
         let start = self.block_meta[block_idx].offset as u64;
         let end = if block_idx + 1 < self.block_meta.len() {
             self.block_meta[block_idx + 1].offset as u64
@@ -202,12 +194,16 @@ impl SsTable {
 
     /// Read a block from disk, with block cache. (Day 4)
     pub fn read_block_cached(&self, block_idx: usize) -> Result<Arc<Block>> {
-        if let Some(cache) = self.block_cache.as_ref() {
-            cache
-                .try_get_with((self.id, block_idx), || self.read_block(block_idx))
-                .map_err(|err| anyhow!(err))
+        if block_idx < self.block_meta.len() {
+            if let Some(cache) = self.block_cache.as_ref() {
+                cache
+                    .try_get_with((self.id, block_idx), || self.read_block(block_idx))
+                    .map_err(|err| anyhow!(err))
+            } else {
+                self.read_block(block_idx)
+            }
         } else {
-            self.read_block(block_idx)
+            Ok(Arc::new(Block::empty()))
         }
     }
 
@@ -216,13 +212,13 @@ impl SsTable {
     /// You may also assume the key-value pairs stored in each consecutive block are sorted.
     pub fn find_block_idx(&self, key: KeySlice) -> usize {
         let n = self.block_meta.len();
-        let (mut i, mut j) = (0, n - 1);
+        let (mut i, mut j) = (0, n);
         while i < j {
-            let mid = (i + j + 1) / 2;
-            if self.block_meta[mid].first_key.as_key_slice() <= key {
-                i = mid
+            let mid = (i + j) / 2;
+            if self.block_meta[mid].last_key.as_key_slice() < key {
+                i = mid + 1
             } else {
-                j = mid - 1
+                j = mid
             }
         }
         i

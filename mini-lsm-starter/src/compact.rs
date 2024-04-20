@@ -4,6 +4,7 @@ mod leveled;
 mod simple_leveled;
 mod tiered;
 
+use std::fs::File;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,8 +16,12 @@ pub use simple_leveled::{
 };
 pub use tiered::{TieredCompactionController, TieredCompactionOptions, TieredCompactionTask};
 
+use crate::iterators::concat_iterator::SstConcatIterator;
+use crate::iterators::merge_iterator::MergeIterator;
+use crate::iterators::two_merge_iterator::TwoMergeIterator;
+use crate::iterators::StorageIterator;
 use crate::lsm_storage::{LsmStorageInner, LsmStorageState};
-use crate::table::SsTable;
+use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum CompactionTask {
@@ -108,11 +113,96 @@ pub enum CompactionOptions {
 
 impl LsmStorageInner {
     fn compact(&self, _task: &CompactionTask) -> Result<Vec<Arc<SsTable>>> {
-        unimplemented!()
+        match _task {
+            CompactionTask::Leveled(_) => todo!(),
+            CompactionTask::Tiered(_) => todo!(),
+            CompactionTask::Simple(_) => todo!(),
+            CompactionTask::ForceFullCompaction {
+                l0_sstables,
+                l1_sstables,
+            } => {
+                let mut merge = {
+                    let state = self.state.read();
+                    let mut l0_iters = Vec::new();
+                    for id in l0_sstables {
+                        let table = state.sstables.get(id).unwrap().clone();
+                        let iter = SsTableIterator::create_and_seek_to_first(table)?;
+                        l0_iters.push(Box::new(iter));
+                    }
+                    let l0_merge = MergeIterator::create(l0_iters);
+
+                    let l1_ssts = l1_sstables
+                        .iter()
+                        .map(|id| state.sstables.get(id).unwrap().clone())
+                        .collect();
+                    let l1_concat = SstConcatIterator::create_and_seek_to_first(l1_ssts)?;
+                    TwoMergeIterator::create(l0_merge, l1_concat)?
+                };
+
+                let mut builder = SsTableBuilder::new(self.options.block_size);
+                let mut res = Vec::new();
+                while merge.is_valid() {
+                    if merge.value().is_empty() {
+                        merge.next()?;
+                        continue;
+                    }
+                    builder.add(merge.key(), merge.value());
+                    if builder.estimated_size() >= self.options.target_sst_size {
+                        let id = self.next_sst_id();
+                        let path = self.path_of_sst(id);
+                        if !path.exists() {
+                            File::create(path.clone())?;
+                        }
+                        let table = builder.build(id, None, path)?;
+                        res.push(Arc::new(table));
+                        builder = SsTableBuilder::new(self.options.block_size);
+                    }
+                    merge.next()?;
+                }
+                if builder.estimated_size() > 0 {
+                    let id = self.next_sst_id();
+                    let path = self.path_of_sst(id);
+                    File::create(path.clone())?;
+                    let table = builder.build(id, None, path)?;
+                    res.push(Arc::new(table));
+                }
+                Ok(res)
+            }
+        }
     }
 
     pub fn force_full_compaction(&self) -> Result<()> {
-        unimplemented!()
+        let l0;
+        let l1;
+        {
+            let state = self.state.read();
+            l0 = state.l0_sstables.clone();
+            l1 = state.levels[0].1.clone();
+        };
+        let task = CompactionTask::ForceFullCompaction {
+            l0_sstables: l0.clone(),
+            l1_sstables: l1.clone(),
+        };
+        let new_ssts = self.compact(&task)?;
+        {
+            let _state_lock = self.state_lock.lock();
+            let mut guard = self.state.write();
+            let state = Arc::get_mut(&mut guard).unwrap();
+            let n = state.l0_sstables.len() - l0.len();
+            state.l0_sstables.truncate(n);
+            for table in &new_ssts {
+                state.sstables.insert(table.sst_id(), Arc::clone(table));
+            }
+            let sst_ids = new_ssts.iter().map(|sst| sst.sst_id()).collect();
+            state.levels[0] = (0, sst_ids);
+            for id in l0.iter().chain(l1.iter()) {
+                state.sstables.remove(id);
+            }
+        };
+        for id in l0.iter().chain(l1.iter()) {
+            std::fs::remove_file(self.path_of_sst(*id))?;
+        }
+        Ok(())
     }
 
     fn trigger_compaction(&self) -> Result<()> {

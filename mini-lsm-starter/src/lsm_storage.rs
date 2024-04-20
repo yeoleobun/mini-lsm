@@ -17,6 +17,7 @@ use crate::compact::{
     CompactionController, CompactionOptions, LeveledCompactionController, LeveledCompactionOptions,
     SimpleLeveledCompactionController, SimpleLeveledCompactionOptions, TieredCompactionController,
 };
+use crate::iterators::concat_iterator::SstConcatIterator;
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::iterators::StorageIterator;
@@ -302,6 +303,8 @@ impl LsmStorageInner {
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
+        let key = KeySlice::from_slice(_key);
+
         let snapshot = Arc::clone(&self.state.read());
         if let Some(value) = snapshot.memtable.get(_key) {
             if value.is_empty() {
@@ -325,7 +328,6 @@ impl LsmStorageInner {
             let table = snapshot.sstables.get(id).unwrap().clone();
             if let Some(bloom) = &table.bloom {
                 if bloom.may_contain(farmhash::fingerprint32(_key)) {
-                    let key = KeySlice::from_slice(_key);
                     let iter = SsTableIterator::create_and_seek_to_key(table, key)?;
                     if iter.is_valid() && iter.key() == key {
                         if iter.value().is_empty() {
@@ -336,6 +338,33 @@ impl LsmStorageInner {
                     }
                 }
             }
+        }
+
+        let l1 = &snapshot.levels[0].1;
+        let mut i = 0;
+        let mut j = l1.len();
+        while i < j {
+            let k = (i + j) / 2;
+            let table = snapshot.sstables.get(&l1[k]).unwrap().clone();
+            if table.last_key().as_key_slice() >= key {
+                j = k;
+            } else {
+                i = k + 1;
+            }
+        }
+
+        if i == l1.len() {
+            return Ok(None);
+        }
+
+        let table = snapshot.sstables.get(&l1[i]).unwrap().clone();
+        let iter = SsTableIterator::create_and_seek_to_key(table, key)?;
+        if iter.is_valid() && iter.key() == key {
+            return if iter.value().is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(Bytes::copy_from_slice(iter.value())))
+            };
         }
         Ok(None)
     }
@@ -406,7 +435,7 @@ impl LsmStorageInner {
         let sst_id = self.next_sst_id();
         let mut sst_builder = SsTableBuilder::new(self.options.block_size);
         memtable_to_flush.flush(&mut sst_builder)?;
-        let path = self.path.join(format!("{:05}.sst", sst_id));
+        let path = self.path_of_sst(sst_id);
         File::create(path.clone())?;
         let sst = sst_builder.build(sst_id, Some(self.block_cache.clone()), path)?;
         {
@@ -443,7 +472,7 @@ impl LsmStorageInner {
                 .map(|i| Box::new(i.scan(_lower, _upper))),
         );
 
-        let sst_iters = snapshot
+        let l0_sst_iters = snapshot
             .l0_sstables
             .iter()
             .filter_map(|id| {
@@ -457,9 +486,19 @@ impl LsmStorageInner {
                 }
             })
             .collect();
+        // todo create concat iterator with bound
+        let l1_sst = snapshot.levels[0]
+            .1
+            .iter()
+            .map(|id| snapshot.sstables.get(id).unwrap().clone())
+            .collect();
+        let l1_sst_iter = SstConcatIterator::create_and_seek_to_first(l1_sst)?;
         let iter = TwoMergeIterator::create(
-            MergeIterator::create(mem_iters),
-            MergeIterator::create(sst_iters),
+            TwoMergeIterator::create(
+                MergeIterator::create(mem_iters),
+                MergeIterator::create(l0_sst_iters),
+            )?,
+            l1_sst_iter,
         )?;
 
         Ok(FusedIterator::new(LsmIterator::new(iter)?))

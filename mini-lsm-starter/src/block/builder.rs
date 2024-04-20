@@ -1,11 +1,7 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
+use super::Block;
+use crate::key::{KeySlice, KeyVec};
 use bytes::BufMut;
 
-use crate::key::{KeySlice, KeyVec};
-
-use super::Block;
 pub fn common_prefix(first_key: &[u8], current_key: &[u8]) -> usize {
     let mut i = 0;
     while i < std::cmp::min(first_key.len(), current_key.len()) && first_key[i] == current_key[i] {
@@ -13,6 +9,7 @@ pub fn common_prefix(first_key: &[u8], current_key: &[u8]) -> usize {
     }
     i
 }
+
 /// Builds a block.
 pub struct BlockBuilder {
     /// Offsets of each key-value entries.
@@ -39,10 +36,8 @@ impl BlockBuilder {
     /// Adds a key-value pair to the block. Returns false when the block is full.
     #[must_use]
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
-        if !self.first_key.is_empty()
-            && self.data.len() + self.offsets.len() * 2 + key.len() + value.len() + 8
-                > self.block_size
-        {
+        let n = self.data.len() + self.offsets.len() * 2 + key.len() + value.len() + 8;
+        if !self.first_key.is_empty() && n > self.block_size {
             return false;
         }
 
@@ -76,5 +71,9 @@ impl BlockBuilder {
             data: self.data,
             offsets: self.offsets,
         }
+    }
+
+    pub fn size(&self) -> usize {
+        self.data.len()
     }
 }

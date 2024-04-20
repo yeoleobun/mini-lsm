@@ -1,11 +1,6 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
-use std::sync::Arc;
-
-use crate::key::{KeySlice, KeyVec};
-
 use super::Block;
+use crate::key::{KeySlice, KeyVec};
+use std::sync::Arc;
 
 /// Iterates on a block.
 pub struct BlockIterator {
@@ -25,7 +20,7 @@ impl BlockIterator {
     fn new(block: Arc<Block>) -> Self {
         let mut first_key = KeyVec::new();
         if !block.data.is_empty() {
-            let key_size = (block.data[0] as usize) << 8 | block.data[1] as usize;
+            let key_size = u16::from_be_bytes(block.data[0..2].try_into().unwrap()) as usize;
             first_key.set_from_slice(KeySlice::from_slice(&block.data[2..key_size + 2]));
         }
         Self {
@@ -37,6 +32,10 @@ impl BlockIterator {
         }
     }
 
+    pub fn create_empty() -> Self {
+        BlockIterator::new(Arc::new(Block::empty()))
+    }
+
     /// Creates a block iterator and seek to the first entry.
     pub fn create_and_seek_to_first(block: Arc<Block>) -> Self {
         let mut iter = Self::new(block);
@@ -46,9 +45,9 @@ impl BlockIterator {
 
     /// Creates a block iterator and seek to the first key that >= `key`.
     pub fn create_and_seek_to_key(block: Arc<Block>, key: KeySlice) -> Self {
-        let mut res = Self::new(block);
-        res.seek_to_key(key);
-        res
+        let mut iter = Self::new(block);
+        iter.seek_to_key(key);
+        iter
     }
 
     /// Returns the key of the current entry.
@@ -72,9 +71,12 @@ impl BlockIterator {
         self.idx = 0;
         self.key = self.first_key.clone();
         if !self.block.data.is_empty() {
-            let key_size = (self.block.data[0] as usize) << 8 | self.block.data[1] as usize;
-            let value_size = (self.block.data[key_size + 2] as usize) << 8
-                | self.block.data[key_size + 3] as usize;
+            let key_size = u16::from_be_bytes(self.block.data[0..2].try_into().unwrap()) as usize;
+            let value_size = u16::from_be_bytes(
+                self.block.data[key_size + 2..key_size + 4]
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
             self.value_range = (key_size + 4, key_size + 4 + value_size);
         } else {
             self.value_range = (0, 0);
@@ -83,7 +85,7 @@ impl BlockIterator {
 
     /// Move to the next key in the block.
     pub fn next(&mut self) {
-        self.idx += 1;
+        self.idx = std::cmp::min(self.idx + 1, self.block.offsets.len());
         if self.idx < self.block.offsets.len() {
             let key_offset = self.block.offsets[self.idx] as usize;
             let common_len = u16::from_be_bytes(
@@ -110,7 +112,7 @@ impl BlockIterator {
             ) as usize;
             self.value_range = (value_offset + 2, value_offset + 2 + value_length);
         } else {
-            self.key = KeyVec::new();
+            self.key.clear();
             self.value_range = (0, 0);
         }
     }
@@ -182,7 +184,7 @@ impl BlockIterator {
             }
         } else {
             self.idx = n;
-            self.key.set_from_slice(KeySlice::from_slice(&[]));
+            self.key.clear();
             self.value_range = (0, 0);
         }
     }
