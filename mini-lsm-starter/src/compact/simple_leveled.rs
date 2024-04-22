@@ -35,7 +35,33 @@ impl SimpleLeveledCompactionController {
         &self,
         _snapshot: &LsmStorageState,
     ) -> Option<SimpleLeveledCompactionTask> {
-        unimplemented!()
+        if _snapshot.l0_sstables.len() >= self.options.level0_file_num_compaction_trigger
+            && _snapshot.levels[0].1.len() as f64 / (_snapshot.l0_sstables.len() as f64)
+                < self.options.size_ratio_percent as f64 / 100.0
+        {
+            return Some(SimpleLeveledCompactionTask {
+                upper_level: None,
+                upper_level_sst_ids: _snapshot.l0_sstables.clone(),
+                lower_level: 1,
+                lower_level_sst_ids: _snapshot.levels[0].1.clone(),
+                is_lower_level_bottom_level: false,
+            });
+        }
+
+        for i in 1..self.options.max_levels {
+            if _snapshot.levels[i].1.len() as f64 / (_snapshot.levels[i - 1].1.len() as f64)
+                < self.options.size_ratio_percent as f64 / 100.0
+            {
+                return Some(SimpleLeveledCompactionTask {
+                    upper_level: Some(i),
+                    upper_level_sst_ids: _snapshot.levels[i - 1].1.clone(),
+                    lower_level: i + 1,
+                    lower_level_sst_ids: _snapshot.levels[i].1.clone(),
+                    is_lower_level_bottom_level: i == _snapshot.levels.len() - 1,
+                });
+            }
+        }
+        None
     }
 
     /// Apply the compaction result.
@@ -51,6 +77,23 @@ impl SimpleLeveledCompactionController {
         _task: &SimpleLeveledCompactionTask,
         _output: &[usize],
     ) -> (LsmStorageState, Vec<usize>) {
-        unimplemented!()
+        let del: Vec<usize> = _task
+            .upper_level_sst_ids
+            .iter()
+            .chain(_task.lower_level_sst_ids.iter())
+            .copied()
+            .collect();
+        let mut new_snapshot = _snapshot.clone();
+        if let Some(upper) = _task.upper_level {
+            new_snapshot.levels[upper - 1].1.clear();
+        } else {
+            let new_len = new_snapshot.l0_sstables.len() - _task.upper_level_sst_ids.len();
+            new_snapshot.l0_sstables.truncate(new_len);
+        }
+        new_snapshot.levels[_task.lower_level - 1].1.clear();
+        new_snapshot.levels[_task.lower_level - 1]
+            .1
+            .extend_from_slice(_output);
+        (new_snapshot, del)
     }
 }

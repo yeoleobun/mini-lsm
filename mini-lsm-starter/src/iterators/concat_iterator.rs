@@ -4,7 +4,7 @@ use crate::{
     table::{SsTable, SsTableIterator},
 };
 use anyhow::Result;
-use std::sync::Arc;
+use std::{ops::Bound, sync::Arc};
 
 /// Concat multiple iterators ordered in key order and their key ranges do not overlap. We do not want to create the
 /// iterators when initializing this iterator to reduce the overhead of seeking.
@@ -12,6 +12,7 @@ pub struct SstConcatIterator {
     current: Option<SsTableIterator>,
     next_sst_idx: usize,
     sstables: Vec<Arc<SsTable>>,
+    end_bound: Bound<Vec<u8>>,
 }
 
 impl SstConcatIterator {
@@ -27,6 +28,7 @@ impl SstConcatIterator {
             current,
             next_sst_idx: 1,
             sstables,
+            end_bound: Bound::Unbounded,
         })
     }
 
@@ -54,7 +56,34 @@ impl SstConcatIterator {
             current,
             next_sst_idx: std::cmp::min(i + 1, sstables.len()),
             sstables,
+            end_bound: Bound::Unbounded,
         })
+    }
+
+    pub fn create_with_bound(
+        sstables: Vec<Arc<SsTable>>,
+        lower_bound: Bound<&[u8]>,
+        upper_bound: Bound<&[u8]>,
+    ) -> Result<Self> {
+        let mut iter = match lower_bound {
+            Bound::Included(bound) => {
+                SstConcatIterator::create_and_seek_to_key(sstables, KeySlice::from_slice(bound))?
+            }
+            Bound::Excluded(bound) => {
+                let mut iter = SstConcatIterator::create_and_seek_to_key(
+                    sstables,
+                    KeySlice::from_slice(bound),
+                )?;
+                let key = KeySlice::from_slice(bound);
+                if iter.is_valid() && iter.key() == key {
+                    iter.next()?
+                }
+                iter
+            }
+            Bound::Unbounded => SstConcatIterator::create_and_seek_to_first(sstables)?,
+        };
+        iter.end_bound = upper_bound.map(Vec::from);
+        Ok(iter)
     }
 }
 

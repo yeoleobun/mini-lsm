@@ -37,7 +37,7 @@ impl BlockBuilder {
     #[must_use]
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
         let n = self.data.len() + self.offsets.len() * 2 + key.len() + value.len() + 8;
-        if !self.first_key.is_empty() && n > self.block_size {
+        if !self.is_empty() && n > self.block_size {
             return false;
         }
 
