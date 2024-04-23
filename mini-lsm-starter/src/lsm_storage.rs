@@ -440,7 +440,11 @@ impl LsmStorageInner {
             let lsm = Arc::make_mut(&mut guard);
             lsm.imm_memtables.pop();
             lsm.sstables.insert(sst_id, Arc::new(sst));
-            lsm.l0_sstables.insert(0, sst_id);
+            if self.compaction_controller.flush_to_l0() {
+                lsm.l0_sstables.insert(0, sst_id);
+            } else {
+                lsm.levels.insert(0, (sst_id, vec![sst_id]));
+            }
         };
         Ok(())
     }

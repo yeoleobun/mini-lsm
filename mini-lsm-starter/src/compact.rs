@@ -152,7 +152,21 @@ impl LsmStorageInner {
     fn compact(&self, _task: &CompactionTask) -> Result<Vec<Arc<SsTable>>> {
         match _task {
             CompactionTask::Leveled(_) => todo!(),
-            CompactionTask::Tiered(_) => todo!(),
+            CompactionTask::Tiered(TieredCompactionTask {
+                tiers,
+                bottom_tier_included,
+            }) => {
+                let snapshot = self.state.read().clone();
+                let mut iters = Vec::with_capacity(tiers.len());
+                for (_, sst_ids) in tiers {
+                    let ssts = sst_ids
+                        .iter()
+                        .map(|id| snapshot.sstables.get(id).unwrap().clone())
+                        .collect();
+                    iters.push(Box::new(SstConcatIterator::create_and_seek_to_first(ssts)?));
+                }
+                self.do_compact(MergeIterator::create(iters), *bottom_tier_included)
+            }
             CompactionTask::Simple(task) => {
                 let snapshot = self.state.read().clone();
                 let lower_ssts = task
@@ -251,29 +265,22 @@ impl LsmStorageInner {
         let Some(task) = task else { return Ok(()) };
         let ssts = self.compact(&task)?;
         let output: Vec<usize> = ssts.iter().map(|sst| sst.sst_id()).collect();
-        let remove = {
-            let mut remove = Vec::new();
-            let _guard = self.state_lock.lock();
-            let read_gurad = self.state.read();
-            let snapshot = read_gurad.as_ref().clone();
-            let (mut snapshot, delete) = self
-                .compaction_controller
-                .apply_compaction_result(&snapshot, &task, &output);
-            for id in delete {
-                snapshot.sstables.remove(&id);
-                remove.push(self.path_of_sst(id));
-            }
-            for sst in ssts {
-                snapshot.sstables.insert(sst.sst_id(), sst);
-            }
-            drop(read_gurad);
-            let mut write_guard = self.state.write();
-            *write_guard = Arc::new(snapshot);
-            remove
-        };
-        for path in remove {
-            std::fs::remove_file(path)?;
+        let _guard = self.state_lock.lock();
+        let read_gurad = self.state.read();
+        let snapshot = read_gurad.as_ref().clone();
+        let (mut snapshot, delete) = self
+            .compaction_controller
+            .apply_compaction_result(&snapshot, &task, &output);
+        for id in delete {
+            snapshot.sstables.remove(&id);
+            std::fs::remove_file(self.path_of_sst(id))?;
         }
+        for sst in ssts {
+            snapshot.sstables.insert(sst.sst_id(), sst);
+        }
+        drop(read_gurad);
+        let mut write_guard = self.state.write();
+        *write_guard = Arc::new(snapshot);
         Ok(())
     }
 
